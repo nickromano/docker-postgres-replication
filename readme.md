@@ -4,7 +4,7 @@
 
 ### Setup Containers
 
-Creates two docker containers: master / follower
+Creates two docker containers: master / follower. [View Source](setup-master-and-follower)
 
 ```bash
 ./setup-master-and-follower
@@ -13,20 +13,20 @@ Creates two docker containers: master / follower
 Make some changes on the `master` db.
 
 ```bash
-$ docker exec -it pgmaster psql -U postgres -c "CREATE DATABASE test;"
-CREATE DATABASE
+docker exec -it pgmaster psql -U postgres -c "CREATE DATABASE test;"
+# CREATE DATABASE
 ```
 
 And changes will be reflected on the `follower`.
 
 ```bash
-$ docker exec -it pgfollower psql -U postgres -c "SELECT datname FROM pg_database WHERE datistemplate = false;"
-
- datname
-----------
- postgres
- test
-(2 rows)
+docker exec -it pgfollower psql -U postgres -c "SELECT datname FROM pg_database WHERE datistemplate = false;"
+# 
+#  datname
+# ----------
+#  postgres
+#  test
+# (2 rows)
 ```
 
 ## Cleanup
