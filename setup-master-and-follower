@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -xe
+
+wait_for_postgres() {
+	# https://github.com/docker-library/postgres/issues/146#issuecomment-224067440
+	until docker run -it --rm \
+		--link $1:pg \
+		postgres:10 \
+		psql -U postgres -h pg -c "select 1" -d postgres; \
+		do sleep 1; done
+}
+
+docker run -d --rm \
+	--name=pgmaster \
+	-e POSTGRES_PASSWORD="" \
+	-p 6666:5432 \
+	-v masterdata:/var/lib/postgresql/data \
+	postgres:10
+
+# Wait for postgres to finish building it's data directory
+wait_for_postgres pgmaster
+
+# Create a user for replication
+docker exec -it $(docker ps --filter="name=pgmaster" -q) psql -U postgres -c "CREATE USER replicator REPLICATION LOGIN ENCRYPTED PASSWORD 'password';"
+
+docker stop pgmaster
+
+# Allow access from the follower container
+docker run --rm \
+	-v masterdata:/var/lib/postgresql/data \
+	postgres:10 \
+	/bin/bash -c '
+echo "host  replication     all     0.0.0.0/0         trust" >> /var/lib/postgresql/data/pg_hba.conf'
+
+# Enable streaming replication on the master
+# https://wiki.postgresql.org/wiki/Streaming_Replication
+docker run --rm \
+	-v masterdata:/var/lib/postgresql/data \
+	postgres:10 \
+	/bin/bash -c '
+echo "wal_level = hot_standby
+max_wal_senders = 5
+wal_keep_segments = 32" >> /var/lib/postgresql/data/postgresql.conf'
+
+# Start the master again
+docker run -d --rm \
+	--name=pgmaster \
+	-e POSTGRES_PASSWORD="" \
+	-v masterdata:/var/lib/postgresql/data \
+	postgres:10
+
+wait_for_postgres pgmaster
+
+# Copy postgres data from master to follower, use root user to get all permissions correct
+docker run --rm \
+	--link=pgmaster \
+	-e POSTGRES_PASSWORD="" \
+	-v followerdata:/var/lib/postgresql/data \
+	postgres:10 \
+	pg_basebackup -h pgmaster -D /var/lib/postgresql/data -P -U postgres --wal-method=stream
+
+# Turn on hot standby mode for the follower
+docker run --rm \
+	-v followerdata:/var/lib/postgresql/data \
+	postgres:10 \
+	/bin/bash -c '
+echo "hot_standby = on" >> /var/lib/postgresql/data/postgresql.conf'
+
+# Add a recovery conf
+docker run --rm \
+	-v followerdata:/var/lib/postgresql/data \
+	postgres:10 \
+	/bin/bash -c "
+echo \"standby_mode          = 'on'
+primary_conninfo      = 'host=pgmaster port=5432 user=replicator password=password'
+\" > /var/lib/postgresql/data/recovery.conf"
+
+# Start the follower
+docker run -d --rm \
+	--name=pgfollower \
+	--link=pgmaster \
+	-e POSTGRES_PASSWORD="" \
+	-v followerdata:/var/lib/postgresql/data \
+	postgres:10
+
+wait_for_postgres pgfollower
